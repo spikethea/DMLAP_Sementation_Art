@@ -17,7 +17,7 @@ model.eval()
 
 processor = SegformerImageProcessor(size=512)
 
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(1)
 
 OUT_PATH = "../unity_stream/mask.png"
 os.makedirs("../unity_stream", exist_ok=True)
@@ -63,7 +63,58 @@ def make_road_gradient(mask):
 
     return t_map
 
+# ==========================================================
+# PAVEMENT GRADIENT
+# ==========================================================
 
+def get_pavement_islands(mask):
+    pav = (mask == PAVEMENT_CLASS).astype(np.uint8)
+    num, labels = cv2.connectedComponents(pav)
+    return num, labels, pav
+
+def pavement_extrusion_contours(mask):
+    pav = (mask == PAVEMENT_CLASS).astype(np.uint8)
+
+    contours, _ = cv2.findContours(
+        pav,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    H, W = mask.shape
+    depth = np.zeros((H, W, 3), dtype=np.float32)
+
+    for c in contours:
+        area = cv2.contourArea(c)
+        if area < 80:
+            continue
+
+        # base shape
+        base = np.zeros((H, W), dtype=np.uint8)
+        cv2.fillConvexPoly(base, c, 1)
+
+        color = 180  # top brightness
+
+        num_layers = 12
+        thickness = 25
+        start = (num_layers - 1) * thickness
+
+        for i in range(num_layers):
+
+            shift = start - i * thickness
+
+            offset = np.roll(base, shift, axis=0)
+
+            if shift < 0:
+                offset[shift:, :] = 0
+            elif shift > 0:
+                offset[:shift, :] = 0
+
+            shade = max(20, color - i * 10)
+
+            depth[offset.astype(bool)] = [shade, shade, shade]
+
+    return depth
 # ==========================================================
 # HARD-CODED ZEBRA DETECTOR
 # ==========================================================
@@ -134,12 +185,9 @@ def apply_flat_segmentation(frame, mask):
     output = frame.copy().astype(np.float32)
 
     road_mask = (mask == ROAD_CLASS)
-    pavement_mask = (mask == PAVEMENT_CLASS)
+    H, W = mask.shape
 
-    # ------------------------------
-    # Pavement
-    # ------------------------------
-    output[pavement_mask] = PAVEMENT_COLOR
+    pavement_mask = (mask == PAVEMENT_CLASS)
 
     # ------------------------------
     # Road gradient
@@ -171,6 +219,21 @@ def apply_flat_segmentation(frame, mask):
     boundary = (road_d & pav_d).astype(bool)
 
     output[boundary] = BOUNDARY_COLOR
+#=========================================================
+    #PAVEMENT CONTOUR
+#=========================================================
+    depth = pavement_extrusion_contours(mask)
+
+    # 1. base slab (top surface)
+    output[pavement_mask] = (128, 128, 128)
+
+    depth_2d = depth[..., 0] if depth.ndim == 3 else depth
+
+    extrusion = depth_2d > 0
+    extrusion_only = extrusion & (~pavement_mask)
+
+    val = depth_2d[extrusion_only][:, None]
+    output[extrusion_only] = np.repeat(val, 3, axis=1)
 
     # ==================================================
     # ZEBRA CROSSING OVERLAY
@@ -187,7 +250,7 @@ def apply_flat_segmentation(frame, mask):
     zebra = np.zeros_like(zebra_raw)
 
     if len(contours) > 0:
-        pts = np.vstack(contours)
+        pts = np.concatenate([c.reshape(-1,2) for c in contours if len(c) > 2], axis=0)
         hull = cv2.convexHull(pts)
         cv2.fillConvexPoly(zebra, hull, 255)
 
@@ -202,8 +265,9 @@ def apply_flat_segmentation(frame, mask):
     # 2. EXTRUDED UNDERSIDE SHADOW / DEPTH
     # duplicate zebra shape slightly downward
     # --------------------------------------------------
-    shadow = np.roll(zebra.astype(np.uint8), 10, axis=0)   # push downward
-    shadow[:10, :] = 0                                     # clear wraparound
+    shadow = np.zeros_like(zebra)
+    shadow[10:, :] = zebra[:-10, :]   # push downward
+    # shadow[:10, :] = 0                                     # clear wraparound
 
     # keep shadow only on road, not pavement
     shadow[pavement_mask] = 0
@@ -246,12 +310,18 @@ def apply_flat_segmentation(frame, mask):
         cv2.CHAIN_APPROX_SIMPLE
     )
 
-    temp = output.astype(np.uint8)
-    cv2.drawContours(temp, contours, -1, (255,255,255), 2)
+    # OUTLINE (optional overlay only)
+    output_u8 = output.astype(np.uint8)
 
-    output = temp
+    cv2.drawContours(
+        output_u8,
+        contours,
+        -1,
+        (255, 255, 255),
+        2
+    )
 
-    return temp
+    return output_u8
 
 
 # ==========================================================
