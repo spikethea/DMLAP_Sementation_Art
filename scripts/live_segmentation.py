@@ -72,7 +72,7 @@ def get_pavement_islands(mask):
     num, labels = cv2.connectedComponents(pav)
     return num, labels, pav
 
-def pavement_extrusion_contours(mask):
+def pavement_extrusion_contours(mask, pavement_mask):
     pav = (mask == PAVEMENT_CLASS).astype(np.uint8)
 
     contours, _ = cv2.findContours(
@@ -112,7 +112,8 @@ def pavement_extrusion_contours(mask):
 
             shade = max(20, color - i * 10)
 
-            depth[offset.astype(bool)] = [shade, shade, shade]
+            mask = offset.astype(bool) & (~pavement_mask)
+            depth[mask] = [shade, shade, shade]
 
     return depth
 # ==========================================================
@@ -222,10 +223,9 @@ def apply_flat_segmentation(frame, mask):
 #=========================================================
     #PAVEMENT CONTOUR
 #=========================================================
-    depth = pavement_extrusion_contours(mask)
+    depth = pavement_extrusion_contours(mask, pavement_mask)
 
-    # 1. base slab (top surface)
-    output[pavement_mask] = (128, 128, 128)
+
 
     depth_2d = depth[..., 0] if depth.ndim == 3 else depth
 
@@ -320,6 +320,9 @@ def apply_flat_segmentation(frame, mask):
         (255, 255, 255),
         2
     )
+
+    # 1. pavement on top of zebra, SO THAT SUBTRACT WORKS
+    output[pavement_mask] = (128, 128, 128)
 
     return output_u8
 
