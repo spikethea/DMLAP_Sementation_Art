@@ -4,8 +4,13 @@ import numpy as np
 import os
 from transformers import SegformerImageProcessor, SegformerForSemanticSegmentation
 
+# ChatGPT 3.5 + 4o has been used to help structure this code and speed up development for 
+# delivering boilerplate code for standard tasks like Segformer Segmentation 
+# and part of the zebra detection logic, but the linear gradient implementation, 
+# psuedo 3d extursion custom-designed effects, and other OpenCV-based contour detection are original, programmed by me. 
+
 # ==========================================================
-# MODEL SETUP
+# MODEL SETUP + CAMERA
 # ==========================================================
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -17,7 +22,7 @@ model.eval()
 
 processor = SegformerImageProcessor(size=512)
 
-cap = cv2.VideoCapture(1)
+cap = cv2.VideoCapture(0)
 
 OUT_PATH = "../unity_stream/mask.png"
 os.makedirs("../unity_stream", exist_ok=True)
@@ -96,7 +101,7 @@ def pavement_extrusion_contours(mask, pavement_mask):
         color = 180  # top brightness
 
         num_layers = 12
-        thickness = 25
+        thickness = 14
         start = (num_layers - 1) * thickness
 
         for i in range(num_layers):
@@ -184,6 +189,7 @@ def detect_zebra(frame, road_mask):
 # ==========================================================
 def apply_flat_segmentation(frame, mask):
     output = frame.copy().astype(np.float32)
+    
 
     road_mask = (mask == ROAD_CLASS)
     H, W = mask.shape
@@ -255,16 +261,9 @@ def apply_flat_segmentation(frame, mask):
         cv2.fillConvexPoly(zebra, hull, 255)
 
     zebra_bool = zebra > 0
-    # --------------------------------------------------
-    # 1. REMOVE ANY ZEBRA ON TOP OF PAVEMENT
-    # keeps crossing only on road / under pavement edges
-    # --------------------------------------------------
+
     zebra_bool[pavement_mask] = False
 
-    # --------------------------------------------------
-    # 2. EXTRUDED UNDERSIDE SHADOW / DEPTH
-    # duplicate zebra shape slightly downward
-    # --------------------------------------------------
     shadow = np.zeros_like(zebra)
     shadow[10:, :] = zebra[:-10, :]   # push downward
     # shadow[:10, :] = 0                                     # clear wraparound
